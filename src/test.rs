@@ -4,6 +4,7 @@ use crate::debug_metrics_safe::DebugMetricsSafeTrait;
 use crate::label_iter::NoLabels;
 use crate::DebugMetrics;
 use indoc::indoc;
+use log::debug;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 

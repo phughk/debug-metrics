@@ -8,4 +8,8 @@ mod label_iter;
 mod test;
 
 pub use debug_metrics::DebugMetrics;
+pub use debug_metrics::DebugMetricsTrait;
 pub use debug_metrics_safe::DebugMetricsSafe;
+pub use debug_metrics_safe::DebugMetricsSafeTrait;
+pub use label_iter::LabelIter;
+pub use label_iter::NoLabels;
