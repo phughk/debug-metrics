@@ -1,6 +1,7 @@
 use crate::config::DebugMetricsConfig;
 use crate::debug_metrics::{DebugMetricsTrait, DefaultExt, EventType};
 use crate::DebugMetrics;
+use indoc::indoc;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 
@@ -24,7 +25,11 @@ fn metrics_are_displayed_if_no_rules() {
     c.set_position(0);
     let mut output = String::new();
     c.read_to_string(&mut output).unwrap();
-    let expected = r#"example: 1 :: {}"#;
+    let expected = indoc!(
+        r#"
+        example: 1 :: {}
+    "#
+    );
     assert_eq!(output, expected);
 }
 
@@ -39,17 +44,32 @@ fn can_use_labels() {
     };
     assert_eq!(
         events,
-        vec![EventType::MetricChange {
-            metric: "example".to_string(),
-            count: 42,
-            dependencies: BTreeMap::from([]),
-            labels: BTreeMap::from([("stage".to_string(), "one".to_string())]),
-        }]
+        vec![
+            EventType::CascadeLabelChange {
+                cause: "example".to_string(),
+                label: "stage".to_string(),
+                value: "one".to_string(),
+                dependencies: Default::default(),
+                labels: BTreeMap::from([("stage".to_string(), "one".to_string())]),
+            },
+            EventType::MetricChange {
+                metric: "example".to_string(),
+                count: 42,
+                dependencies: BTreeMap::from([]),
+                labels: BTreeMap::from([("stage".to_string(), "one".to_string())]),
+            }
+        ]
     );
     c.set_position(0);
     let mut output = String::new();
     c.read_to_string(&mut output).unwrap();
-    let expected = r#"example: 42 :: {"stage": "one"}"#;
+    let expected = indoc!(
+        r#"
+        stage: zero :: {"stage": "zero"}
+        stage (caused by example): one :: {"stage": "one"}
+        example: 42 :: {"stage": "one"}
+    "#
+    );
     assert_eq!(output, expected);
 }
 
@@ -69,6 +89,7 @@ fn label_changes_get_recorded_as_events() {
             config: Default::default(),
             pre_setup: &|debug_metrics| {
                 debug_metrics.add_recording_rule("stage", &[".+"]);
+                debug_metrics.add_drop_hook("stage");
             },
             events: vec![
                 EventType::LabelChange {
@@ -77,26 +98,48 @@ fn label_changes_get_recorded_as_events() {
                     dependencies: BTreeMap::from([]),
                     labels: BTreeMap::from([("stage".to_string(), "zero".to_string())]),
                 },
-                EventType::LabelChange {
+                EventType::CascadeLabelChange {
+                    cause: "metric".to_string(),
                     label: "stage".to_string(),
                     value: "one".to_string(),
                     dependencies: BTreeMap::from([("metric".to_string(), 1)]),
                     labels: BTreeMap::from([("stage".to_string(), "one".to_string())]),
                 },
             ],
-            output: "",
+            output: indoc!(
+                r#"
+                stage: zero :: {"stage": "zero"}
+                stage (caused by metric): one :: {"metric": "1", "stage": "one"}
+                "#
+            ),
         },
         TestCase {
-            name: "Enabled config and no recording rule",
+            name: "Enabled capture all config and no recording rule",
             config: DebugMetricsConfig::default_on(),
             pre_setup: &|debug_metrics| {},
-            events: vec![EventType::LabelChange {
-                label: "".to_string(),
-                value: "".to_string(),
-                dependencies: Default::default(),
-                labels: Default::default(),
-            }],
-            output: "",
+            events: vec![
+                EventType::LabelChange {
+                    label: "stage".to_string(),
+                    value: "zero".to_string(),
+                    dependencies: BTreeMap::from([]),
+                    labels: BTreeMap::from([("stage".to_string(), "zero".to_string())]),
+                },
+                EventType::CascadeLabelChange {
+                    cause: "metric".to_string(),
+                    label: "stage".to_string(),
+                    value: "one".to_string(),
+                    // Metrics are empty, because there is no rule to record them alongside
+                    dependencies: BTreeMap::from([]),
+                    labels: BTreeMap::from([("stage".to_string(), "one".to_string())]),
+                },
+            ],
+            output: indoc!(
+                r#"
+                stage: zero :: {"stage": "zero"}
+                stage (caused by metric): one :: {"stage": "one"}
+                metric: 1 :: {"stage": "one"}
+                "#
+            ),
         },
     ];
     for case in cases {

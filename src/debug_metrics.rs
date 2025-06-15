@@ -233,13 +233,26 @@ impl<W: Write> DebugMetrics<W> {
     fn maybe_include_all_events(&self, event: &mut Option<EventType>, metric_or_label: &str) {
         if event.is_none() && self.config.process_all_events {
             // If no rules match, we still want to record the event
-            let count = self.counts[metric_or_label];
-            *event = Some(EventType::MetricChange {
-                metric: metric_or_label.to_string(),
-                count,
-                dependencies: Default::default(),
-                labels: Default::default(),
-            });
+            let count = self.get_metric_or_label(metric_or_label);
+            match count {
+                None => {}
+                Some(Value::Metric(count)) => {
+                    *event = Some(EventType::MetricChange {
+                        metric: metric_or_label.to_string(),
+                        count,
+                        dependencies: Default::default(),
+                        labels: Default::default(),
+                    });
+                }
+                Some(Value::Label(label)) => {
+                    *event = Some(EventType::LabelChange {
+                        label: metric_or_label.to_string(),
+                        value: label,
+                        dependencies: Default::default(),
+                        labels: Default::default(),
+                    });
+                }
+            }
         }
     }
 
@@ -288,6 +301,24 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
             let key = key.into();
             // Increment
             *self.counts.entry(key.to_string()).or_default() += 1;
+            for (label_key, label_value) in labels {
+                let label_key: String = label_key.into();
+                let label_value: String = label_value.into();
+                if label_key.is_empty() {
+                    // TODO this is a hack, because Vecs need a type and sometimes its just easier
+                    // with empty strings. It will be fixed with a proper iterator API.
+                    continue;
+                }
+                self.labels.insert(label_key.to_string(), label_value);
+                let mut event = None;
+                self.maybe_find_matching_rule(&mut event, &label_key);
+                self.maybe_include_all_events(&mut event, &label_key);
+                self.maybe_include_all_labels_with_event(&mut event);
+                if let Some(event) = event {
+                    let event = event.promote_to_cascade(&key);
+                    self.events.push(event);
+                }
+            }
             let mut event = None;
             self.maybe_find_matching_rule(&mut event, &key);
             self.maybe_include_all_events(&mut event, &key);
@@ -311,8 +342,8 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
             *self.counts.entry(key.to_string()).or_default() = value;
             for (label_key, label_value) in labels {
                 let label_key: String = label_key.into();
-                self.labels
-                    .insert(label_key.to_string(), label_value.into());
+                let label_value: String = label_value.into();
+                self.labels.insert(label_key.to_string(), label_value);
                 let mut event = None;
                 self.maybe_find_matching_rule(&mut event, &label_key);
                 self.maybe_include_all_events(&mut event, &label_key);
@@ -393,7 +424,6 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
 }
 
 impl<W: Write> Drop for DebugMetrics<W> {
-    /// TODO drop should really be for the entire metrics; Cloning will cause multiple drops.
     fn drop(&mut self) {
         for e in self.events.iter() {
             match e {
@@ -412,7 +442,7 @@ impl<W: Write> Drop for DebugMetrics<W> {
                             all_deps.insert(k.clone(), v.clone());
                         });
                         self.output_writer
-                            .write_fmt(format_args!("{metric}: {count} :: {all_deps:?}"))
+                            .write_fmt(format_args!("{metric}: {count} :: {all_deps:?}\n"))
                             .unwrap();
                     }
                 }
@@ -431,7 +461,7 @@ impl<W: Write> Drop for DebugMetrics<W> {
                             all_deps.insert(k.clone(), v.clone());
                         });
                         self.output_writer
-                            .write_fmt(format_args!("{label}: {value} :: {all_deps:?}"))
+                            .write_fmt(format_args!("{label}: {value} :: {all_deps:?}\n"))
                             .unwrap();
                     }
                 }
@@ -452,7 +482,7 @@ impl<W: Write> Drop for DebugMetrics<W> {
                         });
                         self.output_writer
                             .write_fmt(format_args!(
-                                "{metric} (caused by {cause}): {count} :: {all_deps:?}"
+                                "{metric} (caused by {cause}): {count} :: {all_deps:?}\n"
                             ))
                             .unwrap();
                     }
@@ -474,7 +504,7 @@ impl<W: Write> Drop for DebugMetrics<W> {
                         });
                         self.output_writer
                             .write_fmt(format_args!(
-                                "{label} (caused by {cause}): {value} :: {all_deps:?}"
+                                "{label} (caused by {cause}): {value} :: {all_deps:?}\n"
                             ))
                             .unwrap();
                     }
