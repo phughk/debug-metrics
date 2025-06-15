@@ -10,7 +10,11 @@ pub trait DebugMetricsSafeTrait {
 
     fn add_drop_hook<Key: Into<String>>(&self, key: Key);
 
-    fn inc<Key: Into<String>>(&self, key: Key);
+    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
+        &self,
+        key: Key,
+        labels: Vec<(LabelKey, LabelVal)>,
+    );
 
     fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
         &self,
@@ -43,9 +47,13 @@ impl<DM: DebugMetricsTrait> DebugMetricsSafeTrait for DebugMetricsSafe<DM> {
         lock.add_drop_hook(key);
     }
 
-    fn inc<Key: Into<String>>(&self, key: Key) {
+    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
+        &self,
+        key: Key,
+        labels: Vec<(LabelKey, LabelVal)>,
+    ) {
         let mut lock = self.inner.lock().unwrap();
-        lock.inc(key);
+        lock.inc(key, labels);
     }
 
     fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(

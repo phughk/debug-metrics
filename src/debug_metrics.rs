@@ -32,6 +32,54 @@ pub enum EventType {
         dependencies: BTreeMap<String, u64>,
         labels: BTreeMap<String, String>,
     },
+    CascadeMetricChange {
+        cause: String,
+        metric: String,
+        count: u64,
+        dependencies: BTreeMap<String, u64>,
+        labels: BTreeMap<String, String>,
+    },
+    CascadeLabelChange {
+        cause: String,
+        label: String,
+        value: String,
+        dependencies: BTreeMap<String, u64>,
+        labels: BTreeMap<String, String>,
+    },
+}
+
+impl EventType {
+    pub fn promote_to_cascade(self, cause: &str) -> Self {
+        match self {
+            EventType::MetricChange {
+                metric,
+                count,
+                dependencies,
+                labels,
+            } => EventType::CascadeMetricChange {
+                cause: cause.to_string(),
+                metric,
+                count,
+                dependencies,
+                labels,
+            },
+            EventType::LabelChange {
+                label,
+                value,
+                dependencies,
+                labels,
+            } => EventType::CascadeLabelChange {
+                cause: cause.to_string(),
+                label,
+                value,
+                dependencies,
+                labels,
+            },
+            _ => {
+                unreachable!("Unable to promote to cascade: {:?}", self)
+            }
+        }
+    }
 }
 
 impl Default for DebugMetrics<Stdout> {
@@ -41,12 +89,32 @@ impl Default for DebugMetrics<Stdout> {
     }
 }
 
+pub trait DefaultExt {
+    fn default_on() -> Self;
+}
+
+impl DefaultExt for DebugMetrics<Stdout> {
+    fn default_on() -> Self {
+        let config = DebugMetricsConfig::default_on();
+        DebugMetrics::new(stdout(), config)
+    }
+}
+
+enum Value {
+    Metric(u64),
+    Label(String),
+}
+
 pub trait DebugMetricsTrait {
     fn add_recording_rule<Key: Into<String>>(&mut self, metric: Key, additional: &[&'static str]);
 
     fn add_drop_hook<Key: Into<String>>(&mut self, key: Key);
 
-    fn inc<Key: Into<String>>(&mut self, key: Key);
+    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
+        &mut self,
+        key: Key,
+        labels: Vec<(LabelKey, LabelVal)>,
+    );
 
     fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
         &mut self,
@@ -76,6 +144,114 @@ impl<W: Write> DebugMetrics<W> {
     pub fn safe(self) -> DebugMetricsSafe<DebugMetrics<W>> {
         DebugMetricsSafe::new(self)
     }
+
+    fn matching_rules_for_regexes(
+        &self,
+        regexes: &BTreeSet<&'static str>,
+        counts: &BTreeMap<String, u64>,
+        labels: &BTreeMap<String, String>,
+    ) -> (BTreeMap<String, u64>, BTreeMap<String, String>) {
+        let mut found = BTreeSet::new();
+        let mut count_ret = BTreeMap::new();
+        let mut label_ret = BTreeMap::new();
+        for patt in regexes {
+            for (k, v) in counts {
+                // Create regex from pattern
+                let re = regex::Regex::new(patt).unwrap();
+                if !found.contains(k) && re.is_match(k) {
+                    found.insert(k);
+                    count_ret.insert(k.to_string(), *v);
+                }
+            }
+            for (k, v) in labels {
+                // Create regex from pattern
+                let re = regex::Regex::new(patt).unwrap();
+                if !found.contains(k) && re.is_match(k) {
+                    found.insert(k);
+                    label_ret.insert(k.to_string(), v.clone());
+                }
+            }
+        }
+        (count_ret, label_ret)
+    }
+    fn maybe_include_all_labels_with_event(&self, event: &mut Option<EventType>) {
+        if self.config.all_labels_every_event {
+            if let Some(event) = event {
+                for (label_key, label_value) in &self.labels {
+                    match event {
+                        EventType::MetricChange {
+                            metric,
+                            count,
+                            dependencies,
+                            labels,
+                        } => {
+                            labels.insert(label_key.clone(), label_value.clone());
+                        }
+                        EventType::LabelChange {
+                            label,
+                            value,
+                            dependencies,
+                            labels,
+                        } => {
+                            labels.insert(label_key.clone(), label_value.clone());
+                        }
+                        _ => {
+                            unreachable!("Unexpected event type: {:?}", event);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn maybe_find_matching_rule(&self, event: &mut Option<EventType>, metric_or_label: &str) {
+        if let Some(rules) = self.rules.get(metric_or_label) {
+            let (matching_metrics, matching_labels) =
+                self.matching_rules_for_regexes(rules, &self.counts, &self.labels);
+            let c = self.get_metric_or_label(metric_or_label);
+            match c {
+                None => {}
+                Some(Value::Metric(c)) => {
+                    *event = Some(EventType::MetricChange {
+                        metric: metric_or_label.to_string(),
+                        count: c,
+                        dependencies: matching_metrics,
+                        labels: matching_labels,
+                    });
+                }
+                Some(Value::Label(l)) => {
+                    *event = Some(EventType::LabelChange {
+                        label: metric_or_label.to_string(),
+                        value: l,
+                        dependencies: matching_metrics,
+                        labels: matching_labels,
+                    })
+                }
+            }
+        }
+    }
+
+    fn maybe_include_all_events(&self, event: &mut Option<EventType>, metric_or_label: &str) {
+        if event.is_none() && self.config.process_all_events {
+            // If no rules match, we still want to record the event
+            let count = self.counts[metric_or_label];
+            *event = Some(EventType::MetricChange {
+                metric: metric_or_label.to_string(),
+                count,
+                dependencies: Default::default(),
+                labels: Default::default(),
+            });
+        }
+    }
+
+    fn get_metric_or_label(&self, key: &str) -> Option<Value> {
+        if let Some(count) = self.counts.get(key) {
+            Some(Value::Metric(*count))
+        } else if let Some(label) = self.labels.get(key) {
+            Some(Value::Label(label.clone()))
+        } else {
+            None
+        }
+    }
 }
 
 impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
@@ -102,33 +278,20 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
         }
     }
 
-    fn inc<Key: Into<String>>(&mut self, key: Key) {
+    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
+        &mut self,
+        key: Key,
+        labels: Vec<(LabelKey, LabelVal)>,
+    ) {
         #[cfg(debug_assertions)]
         {
             let key = key.into();
             // Increment
             *self.counts.entry(key.to_string()).or_default() += 1;
             let mut event = None;
-            if let Some(rules) = self.rules.get(&key) {
-                let mut read = matching_rules_for_regexes(rules, &self.counts);
-                let c = self.counts[&key];
-                event = Some(EventType::MetricChange {
-                    metric: key.to_string(),
-                    count: c,
-                    dependencies: read,
-                    labels: Default::default(),
-                });
-            }
-            if event.is_none() && self.config.process_all_events {
-                // If no rules match, we still want to record the event
-                let count = self.counts[&key];
-                event = Some(EventType::MetricChange {
-                    metric: key,
-                    count,
-                    dependencies: Default::default(),
-                    labels: Default::default(),
-                });
-            }
+            self.maybe_find_matching_rule(&mut event, &key);
+            self.maybe_include_all_events(&mut event, &key);
+            self.maybe_include_all_labels_with_event(&mut event);
             if let Some(event) = event {
                 self.events.push(event);
             }
@@ -148,17 +311,22 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
             *self.counts.entry(key.to_string()).or_default() = value;
             for (label_key, label_value) in labels {
                 let label_key: String = label_key.into();
-                self.labels.insert(label_key.into(), label_value.into());
+                self.labels
+                    .insert(label_key.to_string(), label_value.into());
+                let mut event = None;
+                self.maybe_find_matching_rule(&mut event, &label_key);
+                self.maybe_include_all_events(&mut event, &label_key);
+                self.maybe_include_all_labels_with_event(&mut event);
+                if let Some(event) = event {
+                    let event = event.promote_to_cascade(&key);
+                    self.events.push(event);
+                }
             }
-            if let Some(rules) = self.rules.get(&key) {
-                let mut read = matching_rules_for_regexes(rules, &self.counts);
-                let c = self.counts[&key];
-                let event = EventType::MetricChange {
-                    metric: key,
-                    count: c,
-                    dependencies: read,
-                    labels: Default::default(),
-                };
+            let mut event = None;
+            self.maybe_find_matching_rule(&mut event, &key);
+            self.maybe_include_all_events(&mut event, &key);
+            self.maybe_include_all_labels_with_event(&mut event);
+            if let Some(event) = event {
                 self.events.push(event);
             }
         }
@@ -169,8 +337,14 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
         {
             let key = key.into();
             let value = value.into();
-            self.labels.insert(key, value);
-            todo!()
+            self.labels.insert(key.to_string(), value.to_string());
+            let mut event = None;
+            self.maybe_find_matching_rule(&mut event, &key);
+            self.maybe_include_all_events(&mut event, &key);
+            self.maybe_include_all_labels_with_event(&mut event);
+            if let Some(event) = event {
+                self.events.push(event);
+            }
         }
     }
 
@@ -187,7 +361,26 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
                         dependencies,
                         labels,
                     } => metric == &key,
-                    EventType::LabelChange { .. } => false,
+                    EventType::LabelChange {
+                        label,
+                        value,
+                        dependencies,
+                        labels,
+                    } => label == &key,
+                    EventType::CascadeMetricChange {
+                        cause,
+                        metric,
+                        count,
+                        dependencies,
+                        labels,
+                    } => metric == &key || cause == &key,
+                    EventType::CascadeLabelChange {
+                        cause,
+                        label,
+                        value,
+                        dependencies,
+                        labels,
+                    } => label == &key || cause == &key,
                 })
                 .cloned()
                 .collect()
@@ -211,36 +404,83 @@ impl<W: Write> Drop for DebugMetrics<W> {
                     labels,
                 } => {
                     if self.config.process_all_events | self.drop_print.contains(metric) {
+                        let mut all_deps = BTreeMap::new();
+                        dependencies.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.to_string());
+                        });
+                        labels.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.clone());
+                        });
                         self.output_writer
-                            .write_fmt(format_args!("{metric}: {count} :: {dependencies:?}"))
+                            .write_fmt(format_args!("{metric}: {count} :: {all_deps:?}"))
                             .unwrap();
                     }
                 }
-                EventType::LabelChange { .. } => {
-                    todo!()
+                EventType::LabelChange {
+                    label,
+                    value,
+                    dependencies,
+                    labels,
+                } => {
+                    if self.config.process_all_events | self.drop_print.contains(label) {
+                        let mut all_deps = BTreeMap::new();
+                        dependencies.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.to_string());
+                        });
+                        labels.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.clone());
+                        });
+                        self.output_writer
+                            .write_fmt(format_args!("{label}: {value} :: {all_deps:?}"))
+                            .unwrap();
+                    }
+                }
+                EventType::CascadeMetricChange {
+                    cause,
+                    metric,
+                    count,
+                    dependencies,
+                    labels,
+                } => {
+                    if self.config.process_all_events | self.drop_print.contains(metric) {
+                        let mut all_deps = BTreeMap::new();
+                        dependencies.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.to_string());
+                        });
+                        labels.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.clone());
+                        });
+                        self.output_writer
+                            .write_fmt(format_args!(
+                                "{metric} (caused by {cause}): {count} :: {all_deps:?}"
+                            ))
+                            .unwrap();
+                    }
+                }
+                EventType::CascadeLabelChange {
+                    cause,
+                    label,
+                    value,
+                    dependencies,
+                    labels,
+                } => {
+                    if self.config.process_all_events | self.drop_print.contains(label) {
+                        let mut all_deps = BTreeMap::new();
+                        dependencies.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.to_string());
+                        });
+                        labels.iter().for_each(|(k, v)| {
+                            all_deps.insert(k.clone(), v.clone());
+                        });
+                        self.output_writer
+                            .write_fmt(format_args!(
+                                "{label} (caused by {cause}): {value} :: {all_deps:?}"
+                            ))
+                            .unwrap();
+                    }
                 }
             }
         }
         self.output_writer.flush().unwrap();
     }
-}
-
-#[cfg(debug_assertions)]
-fn matching_rules_for_regexes(
-    regexes: &BTreeSet<&'static str>,
-    counts: &BTreeMap<String, u64>,
-) -> BTreeMap<String, u64> {
-    let mut found = BTreeSet::new();
-    let mut ret = BTreeMap::new();
-    for patt in regexes {
-        for (k, v) in counts {
-            // Create regex from pattern
-            let re = regex::Regex::new(patt).unwrap();
-            if !found.contains(k) && re.is_match(k) {
-                found.insert(k);
-                ret.insert(k.to_string(), *v);
-            }
-        }
-    }
-    ret
 }
