@@ -7,8 +7,10 @@ mod label_iter;
 #[cfg(test)]
 mod test;
 
+pub use config::DebugMetricsConfig;
 pub use debug_metrics::DebugMetrics;
 pub use debug_metrics::DebugMetricsTrait;
+pub use debug_metrics::DefaultExt;
 pub use debug_metrics_safe::DebugMetricsSafe;
 pub use debug_metrics_safe::DebugMetricsSafeTrait;
 pub use label_iter::LabelIter;
