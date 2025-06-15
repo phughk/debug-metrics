@@ -1,5 +1,6 @@
 use crate::config::DebugMetricsConfig;
 use crate::drop_hook::DropHook;
+use crate::label_iter::LabelIter;
 use crate::DebugMetricsSafe;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{stdout, Stdout, Write};
@@ -111,18 +112,9 @@ pub trait DebugMetricsTrait {
 
     fn add_drop_hook<Key: Into<String>>(&mut self, key: Key);
 
-    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &mut self,
-        key: Key,
-        labels: Vec<(LabelKey, LabelVal)>,
-    );
+    fn inc<Key: Into<String>, Iter: LabelIter>(&mut self, key: Key, labels: Iter);
 
-    fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &mut self,
-        key: Key,
-        value: u64,
-        labels: Vec<(LabelKey, LabelVal)>,
-    );
+    fn set<Key: Into<String>, Iter: LabelIter>(&mut self, key: Key, value: u64, labels: Iter);
 
     fn set_label<Key: Into<String>, Value: Into<String>>(&mut self, key: Key, value: Value);
 
@@ -302,19 +294,15 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
         }
     }
 
-    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &mut self,
-        key: Key,
-        labels: Vec<(LabelKey, LabelVal)>,
-    ) {
+    fn inc<Key: Into<String>, Iter: LabelIter>(&mut self, key: Key, labels: Iter) {
         #[cfg(debug_assertions)]
         {
             let key = key.into();
             // Increment
             *self.counts.entry(key.to_string()).or_default() += 1;
-            for (label_key, label_value) in labels {
-                let label_key: String = label_key.into();
-                let label_value: String = label_value.into();
+            for (label_key, label_value) in labels.iter() {
+                let label_key: String = label_key.as_ref().to_string();
+                let label_value: String = label_value.as_ref().to_string();
                 if label_key.is_empty() {
                     // TODO this is a hack, because Vecs need a type and sometimes its just easier
                     // with empty strings. It will be fixed with a proper iterator API.
@@ -340,20 +328,15 @@ impl<W: Write> DebugMetricsTrait for DebugMetrics<W> {
         }
     }
 
-    fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &mut self,
-        key: Key,
-        value: u64,
-        labels: Vec<(LabelKey, LabelVal)>,
-    ) {
+    fn set<Key: Into<String>, Iter: LabelIter>(&mut self, key: Key, value: u64, mut labels: Iter) {
         #[cfg(debug_assertions)]
         {
             let key = key.into();
             // Increment
             *self.counts.entry(key.to_string()).or_default() = value;
-            for (label_key, label_value) in labels {
-                let label_key: String = label_key.into();
-                let label_value: String = label_value.into();
+            for (label_key, label_value) in labels.iter() {
+                let label_key: String = label_key.as_ref().to_string();
+                let label_value: String = label_value.as_ref().to_string();
                 self.labels.insert(label_key.to_string(), label_value);
                 let mut event = None;
                 self.maybe_find_matching_rule(&mut event, &label_key);

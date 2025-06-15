@@ -1,5 +1,6 @@
 use crate::debug_metrics::{DebugMetricsTrait, EventType};
 use crate::drop_hook_safe::DropHookSafe;
+use crate::label_iter::LabelIter;
 use std::sync::{Arc, Mutex};
 
 pub struct DebugMetricsSafe<DM: DebugMetricsTrait> {
@@ -20,18 +21,9 @@ pub trait DebugMetricsSafeTrait: Clone {
 
     fn add_drop_hook<Key: Into<String>>(&self, key: Key);
 
-    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &self,
-        key: Key,
-        labels: Vec<(LabelKey, LabelVal)>,
-    );
+    fn inc<Key: Into<String>, Iter: LabelIter>(&self, key: Key, labels: Iter);
 
-    fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &self,
-        key: Key,
-        value: u64,
-        labels: Vec<(LabelKey, LabelVal)>,
-    );
+    fn set<Key: Into<String>, Iter: LabelIter>(&self, key: Key, value: u64, labels: Iter);
 
     fn set_label<Key: Into<String>, Value: Into<String>>(&self, key: Key, value: Value);
 
@@ -67,21 +59,12 @@ impl<DM: DebugMetricsTrait> DebugMetricsSafeTrait for DebugMetricsSafe<DM> {
         lock.add_drop_hook(key);
     }
 
-    fn inc<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &self,
-        key: Key,
-        labels: Vec<(LabelKey, LabelVal)>,
-    ) {
+    fn inc<Key: Into<String>, Iter: LabelIter>(&self, key: Key, labels: Iter) {
         let mut lock = self.inner.lock().unwrap();
         lock.inc(key, labels);
     }
 
-    fn set<Key: Into<String>, LabelKey: Into<String>, LabelVal: Into<String>>(
-        &self,
-        key: Key,
-        value: u64,
-        labels: Vec<(LabelKey, LabelVal)>,
-    ) {
+    fn set<Key: Into<String>, Iter: LabelIter>(&self, key: Key, value: u64, labels: Iter) {
         let mut lock = self.inner.lock().unwrap();
         lock.set(key, value, labels);
     }

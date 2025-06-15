@@ -1,6 +1,7 @@
 use crate::config::DebugMetricsConfig;
 use crate::debug_metrics::{DebugMetricsTrait, DefaultExt, EventType};
 use crate::debug_metrics_safe::DebugMetricsSafeTrait;
+use crate::label_iter::NoLabels;
 use crate::DebugMetrics;
 use indoc::indoc;
 use std::collections::BTreeMap;
@@ -11,7 +12,7 @@ fn metrics_are_displayed_if_no_rules() {
     let mut c = Cursor::new(Vec::new());
     let events = {
         let mut debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default_on());
-        debug_metrics.inc("example", vec![("", "")]);
+        debug_metrics.inc("example", NoLabels);
         debug_metrics.events_for_key("example")
     };
     assert_eq!(
@@ -40,7 +41,7 @@ fn can_use_labels() {
     let events = {
         let mut debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default_on());
         debug_metrics.set_label("stage", "zero");
-        debug_metrics.set("example", 42, vec![("stage", "one")]);
+        debug_metrics.set("example", 42, vec![("stage", "one")].into_iter());
         debug_metrics.events_for_key("example")
     };
     assert_eq!(
@@ -150,7 +151,7 @@ fn label_changes_get_recorded_as_events() {
             let pre_setup = case.pre_setup;
             pre_setup(&mut debug_metrics);
             debug_metrics.set_label("stage", "zero");
-            debug_metrics.inc("metric", vec![("stage", "one")]);
+            debug_metrics.inc("metric", vec![("stage", "one")].into_iter());
             debug_metrics.events_for_key("stage")
         };
         assert_eq!(&events, &case.events, "{}", case.name);
@@ -168,7 +169,7 @@ fn test_drop_hook() {
     debug_metrics.add_recording_rule("dropped", &[]);
     let some_val = {
         let _drop_hook = debug_metrics.with_drop_hook(|dm| {
-            dm.inc("dropped", vec![("", "")]);
+            dm.inc("dropped", NoLabels);
         });
         42
     };
@@ -188,11 +189,11 @@ fn test_drop_hook() {
 #[test]
 fn test_drop_hook_safe() {
     let mut c = Cursor::new(Vec::new());
-    let mut debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default()).safe();
+    let debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default()).safe();
     debug_metrics.add_recording_rule("dropped", &[]);
     let some_val = {
         let _drop_hook = debug_metrics.with_drop_hook(|dm| {
-            dm.inc("dropped", vec![("", "")]);
+            dm.inc("dropped", NoLabels);
         });
         42
     };
