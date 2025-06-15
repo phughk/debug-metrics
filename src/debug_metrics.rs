@@ -1,4 +1,5 @@
 use crate::config::DebugMetricsConfig;
+use crate::drop_hook::DropHook;
 use crate::DebugMetricsSafe;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{stdout, Stdout, Write};
@@ -126,6 +127,16 @@ pub trait DebugMetricsTrait {
     fn set_label<Key: Into<String>, Value: Into<String>>(&mut self, key: Key, value: Value);
 
     fn events_for_key<Key: Into<String>>(&self, key: Key) -> Vec<EventType>;
+
+    fn with_drop_hook<CallFn>(&mut self, call_fn: CallFn) -> DropHook<Self, CallFn>
+    where
+        CallFn: Fn(&mut Self),
+    {
+        DropHook {
+            debug_metrics: self,
+            call_fn,
+        }
+    }
 }
 
 impl<W: Write> DebugMetrics<W> {

@@ -1,11 +1,21 @@
 use crate::debug_metrics::{DebugMetricsTrait, EventType};
+use crate::drop_hook_safe::DropHookSafe;
 use std::sync::{Arc, Mutex};
 
 pub struct DebugMetricsSafe<DM: DebugMetricsTrait> {
     inner: Arc<Mutex<DM>>,
 }
 
-pub trait DebugMetricsSafeTrait {
+// Derive does not work, because it expects the generic to be Clone as well
+impl<DM: DebugMetricsTrait> Clone for DebugMetricsSafe<DM> {
+    fn clone(&self) -> Self {
+        DebugMetricsSafe {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+pub trait DebugMetricsSafeTrait: Clone {
     fn add_recording_rule<Key: Into<String>>(&self, metric: Key, additional: &[&'static str]);
 
     fn add_drop_hook<Key: Into<String>>(&self, key: Key);
@@ -26,6 +36,16 @@ pub trait DebugMetricsSafeTrait {
     fn set_label<Key: Into<String>, Value: Into<String>>(&self, key: Key, value: Value);
 
     fn events_for_key<Key: Into<String>>(&self, key: Key) -> Vec<EventType>;
+
+    fn with_drop_hook<CallFn>(&self, call_fn: CallFn) -> DropHookSafe<Self, CallFn>
+    where
+        CallFn: Fn(&Self),
+    {
+        DropHookSafe {
+            debug_metrics: self.clone(),
+            call_fn,
+        }
+    }
 }
 
 impl<DM: DebugMetricsTrait> DebugMetricsSafe<DM> {
