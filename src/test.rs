@@ -1,5 +1,6 @@
 use crate::config::DebugMetricsConfig;
 use crate::debug_metrics::{DebugMetricsTrait, DefaultExt, EventType};
+use crate::debug_metrics_safe::DebugMetricsSafeTrait;
 use crate::DebugMetrics;
 use indoc::indoc;
 use std::collections::BTreeMap;
@@ -158,4 +159,52 @@ fn label_changes_get_recorded_as_events() {
         c.read_to_string(&mut output).unwrap();
         assert_eq!(output, case.output, "{}", case.name);
     }
+}
+
+#[test]
+fn test_drop_hook() {
+    let mut c = Cursor::new(Vec::new());
+    let mut debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default());
+    debug_metrics.add_recording_rule("dropped", &[]);
+    let some_val = {
+        let _drop_hook = debug_metrics.with_drop_hook(|dm| {
+            dm.inc("dropped", vec![("", "")]);
+        });
+        42
+    };
+    assert_eq!(some_val, 42);
+    let events = debug_metrics.events_for_key("dropped");
+    assert_eq!(
+        events,
+        vec![EventType::MetricChange {
+            metric: "dropped".to_string(),
+            count: 1,
+            dependencies: Default::default(),
+            labels: Default::default(),
+        }]
+    )
+}
+
+#[test]
+fn test_drop_hook_safe() {
+    let mut c = Cursor::new(Vec::new());
+    let mut debug_metrics = DebugMetrics::new(&mut c, DebugMetricsConfig::default()).safe();
+    debug_metrics.add_recording_rule("dropped", &[]);
+    let some_val = {
+        let _drop_hook = debug_metrics.with_drop_hook(|dm| {
+            dm.inc("dropped", vec![("", "")]);
+        });
+        42
+    };
+    assert_eq!(some_val, 42);
+    let events = debug_metrics.events_for_key("dropped");
+    assert_eq!(
+        events,
+        vec![EventType::MetricChange {
+            metric: "dropped".to_string(),
+            count: 1,
+            dependencies: Default::default(),
+            labels: Default::default(),
+        }]
+    )
 }
